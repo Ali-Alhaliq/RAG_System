@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en" dir="ltr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Vision & OCR Assistant</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; display: flex; justify-content: center; height: 100vh; box-sizing: border-box; }
+        #chat-container { width: 100%; max-width: 650px; background: white; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); display: flex; flex-direction: column; overflow: hidden; }
+        #chat-header { background: #0078D4; color: white; padding: 15px; text-align: center; font-size: 1.2em; font-weight: bold; }
+        #chat-box { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; }
+        .message { max-width: 80%; padding: 10px 15px; border-radius: 15px; line-height: 1.5; word-wrap: break-word; }
+        .user-msg { background: #E1F0FF; color: #003366; align-self: flex-end; border-bottom-right-radius: 0; }
+        .bot-msg { background: #F1F1F1; color: #333; align-self: flex-start; border-bottom-left-radius: 0; }
+        
+        #input-area-wrapper { display: flex; flex-direction: column; border-top: 1px solid #ddd; background: #fafafa; }
+        #image-preview-bar { display: none; padding: 6px 12px; background: #eef2f5; font-size: 0.9em; color: #005A9E; align-items: center; justify-content: space-between; border-bottom: 1px solid #e0e0e0; }
+        #image-preview-bar span { font-weight: bold; }
+        #remove-img-btn { background: none; border: none; color: #d9534f; cursor: pointer; font-weight: bold; font-size: 1em; }
+        
+        #input-area { display: flex; padding: 10px; gap: 8px; align-items: center; }
+        #user-input { flex: 1; padding: 12px; border: 1px solid #ccc; border-radius: 5px; outline: none; font-size: 1em; }
+        .btn { background: #0078D4; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; font-size: 1em; transition: 0.3s; }
+        .btn:hover { background: #005A9E; }
+        #mic-btn.recording { background: #d9534f; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+<div id="chat-container">
+    <div id="chat-header"> Smart Vision & OCR Assistant</div>
+    <div id="chat-box">
+        <div class="message bot-msg">Welcome! Upload an image, type your question, and click Send.</div>
+    </div>
+    
+    <div id="input-area-wrapper">
+        <!-- شريط معاينة الصورة المرفوعة قبل الإرسال -->
+        <div id="image-preview-bar">
+            <span>📷 Attached: <span id="file-name-display"></span></span>
+            <button id="remove-img-btn" onclick="clearSelectedImage()" title="Remove Image">✖</button>
+        </div>
+        
+        <div id="input-area">
+            <input type="file" id="image-input" accept="image/*" style="display: none;" onchange="handleImageSelection(event)">
+            <button class="btn" onclick="document.getElementById('image-input').click()" title="Upload Image">📷 Image</button>
+            <input type="text" id="user-input" placeholder="Type your question here..." onkeypress="handleKeyPress(event)">
+            <button id="mic-btn" class="btn" onclick="toggleRecord()" title="Click to Record Voice">🎙️ Speak</button>
+            <button id="send-btn" class="btn" onclick="sendMessage()">Send</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    const chatBox = document.getElementById("chat-box");
+    const userInput = document.getElementById("user-input");
+    const micBtn = document.getElementById("mic-btn");
+    const imagePreviewBar = document.getElementById("image-preview-bar");
+    const fileNameDisplay = document.getElementById("file-name-display");
+    
+    let chatHistory = [];
+    let selectedImageFile = null;
+    let isListening = false;
+    let recognition;
+
+    function handleKeyPress(event) {
+        if (event.key === "Enter") sendMessage();
+    }
+
+    // حفظ الصورة مؤقتاً وعرض الشريط الخاص بها بدون إرسالها فوراً
+    function handleImageSelection(event) {
+        const file = event.target.files[0];
+        if (file) {
+            selectedImageFile = file;
+            fileNameDisplay.innerText = file.name;
+            imagePreviewBar.style.display = "flex";
+        }
+    }
+
+    // إلغاء الصورة المرفوعة
+    function clearSelectedImage() {
+        selectedImageFile = null;
+        imagePreviewBar.style.display = "none";
+        document.getElementById("image-input").value = "";
+    }
+
+    // زر الإرسال الموحد (نص + صورة معاً عند الضغط على Send)
+    async function sendMessage() {
+        const text = userInput.value.trim();
+        if (!text && !selectedImageFile) return;
+
+        // طباعة رسالة المستخدم في الشات
+        let userDisplayMsg = text;
+        if (selectedImageFile) {
+            userDisplayMsg = text ? `${text} 📷 [Attached: ${selectedImageFile.name}]` : `📷 [Uploaded Image: ${selectedImageFile.name}]`;
+        }
+        appendMessage(userDisplayMsg, "user-msg");
+
+        userInput.value = "";
+        
+        const formData = new FormData();
+        if (text) formData.append("message", text);
+        else if (selectedImageFile) formData.append("message", "Analyze this image and extract text or details.");
+        
+        if (selectedImageFile) {
+            formData.append("image", selectedImageFile);
+            clearSelectedImage(); // إخفاء شريط المعاينة بعد الإرسال
+        }
+        formData.append("history", JSON.stringify(chatHistory));
+
+        const loadingId = "loading-" + Date.now();
+        appendMessage("Analyzing & Processing...", "bot-msg", loadingId);
+
+        try {
+            const response = await fetch('/chat', {
+                method: 'POST',
+                body: formData
+            });
+            const data = await response.json();
+            document.getElementById(loadingId).remove();
+
+            if (data.reply) {
+                appendMessage(data.reply, "bot-msg");
+                chatHistory.push({"role": "user", "content": userDisplayMsg});
+                chatHistory.push({"role": "assistant", "content": data.reply});
+            } else {
+                appendMessage("Error: " + data.error, "bot-msg");
+            }
+        } catch (error) {
+            document.getElementById(loadingId).remove();
+            appendMessage("Sorry, failed to connect to the server.", "bot-msg");
+        }
+    }
+
+    // التعرف الصوتي للمتصفح
+    function toggleRecord() {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SpeechRecognition) {
+            alert("Speech recognition is not supported in this browser. Please use Google Chrome.");
+            return;
+        }
+
+        if (!isListening) {
+            recognition = new SpeechRecognition();
+            recognition.lang = 'ar-SA';
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            recognition.onstart = () => {
+                isListening = true;
+                micBtn.innerText = "⏹️ Stop";
+                micBtn.classList.add("recording");
+                appendMessage("🔴 Listening...", "user-msg", "voice-status");
+            };
+
+            recognition.onresult = (event) => {
+                userInput.value = event.results[0][0].transcript;
+            };
+
+            recognition.onend = () => {
+                stopListeningState();
+            };
+
+            recognition.start();
+        } else {
+            if (recognition) recognition.stop();
+            stopListeningState();
+        }
+    }
+
+    function stopListeningState() {
+        isListening = false;
+        micBtn.innerText = "🎙️ Speak";
+        micBtn.classList.remove("recording");
+        const statusEl = document.getElementById("voice-status");
+        if (statusEl) statusEl.remove();
+    }
+
+    function appendMessage(text, className, id = null) {
+        const msgDiv = document.createElement("div");
+        msgDiv.className = "message " + className;
+        msgDiv.innerText = text;
+        if (id) msgDiv.id = id;
+        chatBox.appendChild(msgDiv);
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+</script>
+
+</body>
+</html>

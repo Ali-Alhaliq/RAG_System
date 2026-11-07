@@ -1,0 +1,8 @@
+flask
+openai
+azure-search-documents==11.4.0
+python-dotenv
+azure-core
+ragas
+datasets
+langchain-openai
